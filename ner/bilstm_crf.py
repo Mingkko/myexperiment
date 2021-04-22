@@ -1,5 +1,5 @@
 import numpy as np
-import numpy as np
+from sklearn.metrics import f1_score,recall_score,precision_score
 from bert4keras.backend import keras, K
 from bert4keras.models import build_transformer_model
 from bert4keras.tokenizers import Tokenizer
@@ -43,7 +43,7 @@ def load_data(filename):
 
     return D
 
-train_data = load_data('./data/example.train')
+train_data = load_data('./data/example.train')[:100]
 valid_data = load_data('./data/example.dev')
 test_data = load_data('./data/example.test')
 
@@ -110,13 +110,7 @@ model.compile(
 
 class nameentityrecognizer(ViterbiDecoder):
 
-    def recognize(self, text):
-        tokens = tokenizer.tokenize(text)
-        while len(tokens)>512:
-            tokens.pop(-2)
-        mapping = tokenizer.rematch(text, tokens)
-        tokens_ids = tokenizer.tokens_to_ids(tokens)
-        tokens_ids = to_array([tokens_ids])
+    def recognize(self, tokens_ids, y_true):
         nodes = model.predict(tokens_ids)[0]
         labels = self.decode(nodes)
         entities, starting = [], False
@@ -140,14 +134,15 @@ NER = nameentityrecognizer(trans=K.eval(CRF.trans), starts=[0], ends=[0])
 def evaluate(data):
 
     X, Y, Z = 1e-10, 1e-10, 1e-10
-    for d in tqdm(data):
+    for x_true,y_true in tqdm(data):
         text = ''.join([i[0] for i in d])
-        R = set(NER.recognize(text))
+        R = set(NER.recognize(x_true,y_true))
         T = set([tuple(i) for i in d if i[1] !='O'])
         X +=len(R & T)
         Y +=len(R)
         Z +=len(T)
     f1, precision, recall = 2*X/(Y+Z), X/Y, X/Z
+
     return f1, precision, recall
 
 class Evaluator(keras.callbacks.Callback):
@@ -160,7 +155,7 @@ class Evaluator(keras.callbacks.Callback):
         trans = K.eval(CRF.trans)
         NER.trans = trans
         print(NER.trans)
-        f1, precision, recall = evaluate(valid_data)
+        f1, precision, recall = evaluate(data_generator(valid_data,batch_size))
         # 保存最优
         if f1 >= self.best_val_f1:
             self.best_val_f1 = f1
@@ -175,25 +170,30 @@ class Evaluator(keras.callbacks.Callback):
             (f1, precision, recall)
         )
 
+
+TRAIN = 1
+
 if __name__ == '__main__':
 
-    evaluator = Evaluator()
-    train_generator = data_generator(train_data, batch_size)
 
-    # for b in train_generator:
-    #     t_ids, labels = b[0],b[1]
-    #     print(t_ids.shape)
-    #     print(t_ids)
-    #     break
+    if TRAIN:
+        evaluator = Evaluator()
+        train_generator = data_generator(train_data, batch_size)
 
-    model.fit(
-        train_generator.forfit(),
-        steps_per_epoch=len(train_generator),
-        epochs=epochs,
-        callbacks=[evaluator]
-    )
+        # for b in train_generator:
+        #     t_ids, labels = b[0],b[1]
+        #     print(t_ids.shape)
+        #     print(t_ids)
+        #     break
 
-else:
+        model.fit(
+            train_generator.forfit(),
+            steps_per_epoch=len(train_generator),
+            epochs=epochs,
+            callbacks=[evaluator]
+        )
 
-    model.load_weights('./best_model.weights')
-    NER.trans = K.eval(CRF.trans)
+
+    else:
+        model.load_weights('./best_model.weights')
+        NER.trans = K.eval(CRF.trans)
