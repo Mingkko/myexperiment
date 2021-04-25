@@ -43,7 +43,7 @@ def load_data(filename):
 
     return D
 
-train_data = load_data('./data/example.train')[:100]
+train_data = load_data('./data/example.train')
 valid_data = load_data('./data/example.dev')
 test_data = load_data('./data/example.test')
 
@@ -110,7 +110,9 @@ model.compile(
 
 class nameentityrecognizer(ViterbiDecoder):
 
-    def recognize(self, tokens_ids, y_true):
+    def recognize(self, tokens_ids, text):
+        tokens = tokenizer.tokenize(text)
+        mapping = tokenizer.rematch(text,tokens)
         nodes = model.predict(tokens_ids)[0]
         labels = self.decode(nodes)
         entities, starting = [], False
@@ -131,17 +133,28 @@ class nameentityrecognizer(ViterbiDecoder):
 
 NER = nameentityrecognizer(trans=K.eval(CRF.trans), starts=[0], ends=[0])
 
-def evaluate(data):
+def evaluate(data_b):
+
+    # X, Y, Z = 1e-10, 1e-10, 1e-10
+    # for x_true,y_true in tqdm(data):
+    #     text = ''.join([i[0] for i in d])
+    #     R = set(NER.recognize(x_true,y_true))
+    #     T = set([tuple(i) for i in d if i[1] !='O'])
+    #     X +=len(R & T)
+    #     Y +=len(R)
+    #     Z +=len(T)
+    # f1, precision, recall = 2*X/(Y+Z), X/Y, X/Z
 
     X, Y, Z = 1e-10, 1e-10, 1e-10
-    for x_true,y_true in tqdm(data):
-        text = ''.join([i[0] for i in d])
-        R = set(NER.recognize(x_true,y_true))
-        T = set([tuple(i) for i in d if i[1] !='O'])
-        X +=len(R & T)
+    for token_ids,y_true in data_b:
+        text = ''.join(str([tokenizer.decode(tokens)]) for tokens in token_ids)
+        R = set(NER.recognize(token_ids,text))
+        T = set([(j[i],k[i]) for j,k in zip(token_ids,y_true) for i in range(len(k)) if k[i]!=0])
+        X +=len(R&T)
         Y +=len(R)
         Z +=len(T)
     f1, precision, recall = 2*X/(Y+Z), X/Y, X/Z
+
 
     return f1, precision, recall
 
@@ -164,7 +177,7 @@ class Evaluator(keras.callbacks.Callback):
             'valid:  f1: %.5f, precision: %.5f, recall: %.5f, best f1: %.5f\n' %
             (f1, precision, recall, self.best_val_f1)
         )
-        f1, precision, recall = evaluate(test_data)
+        f1, precision, recall = evaluate(data_generator(test_data,batch_size))
         print(
             'test:  f1: %.5f, precision: %.5f, recall: %.5f\n' %
             (f1, precision, recall)
