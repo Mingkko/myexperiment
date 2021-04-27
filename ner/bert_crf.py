@@ -1,5 +1,4 @@
 import numpy as np
-from sklearn.metrics import f1_score,recall_score,precision_score
 from bert4keras.backend import keras, K
 from bert4keras.models import build_transformer_model
 from bert4keras.tokenizers import Tokenizer
@@ -11,87 +10,115 @@ from keras.layers import Dense
 from keras.models import Model
 from tqdm import tqdm
 
+maxlen = 200
 epochs = 10
-MAXLEN = 200
-crf_lr_multiplier = 1000
-batch_size = 32
-learning_rate = 3e-4
+batch_size = 5
+bert_layers = 12
+learning_rate = 1e-5  # bert_layers越小，学习率应该要越大
+crf_lr_multiplier = 1000  # 必要时扩大CRF层的学习率
 
-dict_path = '../pretrain_model/chinese_roberta/vocab.txt'
+# bert配置
+config_path = '../pretrain_model/chinese_wobert_L-12_H-768_A-12/bert_config.json'
+checkpoint_path = '../pretrain_model/chinese_wobert_L-12_H-768_A-12/bert_model.ckpt'
+dict_path = '../pretrain_model/chinese_wobert_L-12_H-768_A-12/vocab.txt'
+
 
 def load_data(filename):
+    """加载数据
+    单条格式：[(片段1, 标签1), (片段2, 标签2), (片段3, 标签3), ...]
+    """
     D = []
-
-    with open(filename,encoding='utf-8') as f:
+    with open(filename, encoding='utf-8') as f:
         f = f.read()
         for l in f.split('\n\n'):
             if not l:
                 continue
-            d, last_flag = [], ""
+            d, last_flag = [], ''
             for c in l.split('\n'):
                 char, this_flag = c.split(' ')
-                if this_flag=='O' and last_flag == 'O':
-                    d[-1][0] +=char
-                elif this_flag=='O' and last_flag != 'O':
-                    d.append([char,'O'])
-                elif this_flag[0] == 'B':
-                    d.append([char,this_flag[2:]])
+                if this_flag == 'O' and last_flag == 'O':
+                    d[-1][0] += char
+                elif this_flag == 'O' and last_flag != 'O':
+                    d.append([char, 'O'])
+                elif this_flag[:1] == 'B':
+                    d.append([char, this_flag[2:]])
                 else:
-                    d[-1][0] +=char
+                    d[-1][0] += char
                 last_flag = this_flag
             D.append(d)
-
     return D
 
-train_data = load_data('./data/example.train')
+
+# 标注数据
+train_data = load_data('./data/example.train')[:10]
 valid_data = load_data('./data/example.dev')
 test_data = load_data('./data/example.test')
 
-tokenizer = Tokenizer(token_dict=dict_path,do_lower_case=True)
 
 
-#类别映射
-labels = ['PER','LOC','ORG']
+# 建立分词器
+tokenizer = Tokenizer(dict_path, do_lower_case=True)
+
+# 类别映射
+labels = ['PER', 'LOC', 'ORG']
 id2label = dict(enumerate(labels))
-label2id = {j:i for i,j in id2label.items()}
-num_labels = len(labels)*2 +1 #tag*BI + O
+label2id = {j: i for i, j in id2label.items()}
+num_labels = len(labels) * 2 + 1
+
 
 class data_generator(DataGenerator):
-
-    def __iter__(self,random=False):
-        batch_token_ids, batch_labels = [], []
+    """数据生成器
+    """
+    def __iter__(self, random=False):
+        batch_token_ids, batch_segment_ids, batch_labels = [], [], []
         for is_end, item in self.sample(random):
             token_ids, labels = [tokenizer._token_start_id], [0]
             for w, l in item:
                 w_token_ids = tokenizer.encode(w)[0][1:-1]
-                if len(token_ids) + len(w_token_ids) < MAXLEN:
+                if len(token_ids) + len(w_token_ids) < maxlen:
                     token_ids += w_token_ids
                     if l == 'O':
                         labels += [0] * len(w_token_ids)
                     else:
-                        B = label2id[l]*2 + 1
-                        I = label2id[l]*2 + 2
-                        labels += ([B] + [I]*(len(w_token_ids)-1))
+                        B = label2id[l] * 2 + 1
+                        I = label2id[l] * 2 + 2
+                        labels += ([B] + [I] * (len(w_token_ids) - 1))
                 else:
                     break
             token_ids += [tokenizer._token_end_id]
             labels += [0]
+            segment_ids = [0] * len(token_ids)
             batch_token_ids.append(token_ids)
+            batch_segment_ids.append(segment_ids)
             batch_labels.append(labels)
             if len(batch_token_ids) == self.batch_size or is_end:
-                batch_token_ids = sequence_padding(batch_token_ids,length=MAXLEN)
-                batch_labels = sequence_padding(batch_labels,length=MAXLEN)
-                yield batch_token_ids, batch_labels
-                batch_token_ids, batch_labels = [], []
+                batch_token_ids = sequence_padding(batch_token_ids)
+                batch_segment_ids = sequence_padding(batch_segment_ids)
+                batch_labels = sequence_padding(batch_labels)
+                yield [batch_token_ids, batch_segment_ids], batch_labels
+                batch_token_ids, batch_segment_ids, batch_labels = [], [], []
 
-model = keras.models.Sequential()
-model.add(keras.layers.Embedding(21129,1024,input_length=MAXLEN))
-model.add(keras.layers.Bidirectional(keras.layers.LSTM(1024,return_sequences=True)))
-model.add(keras.layers.Dropout(0.1))
-model.add(keras.layers.Bidirectional(keras.layers.LSTM(1024,return_sequences=True)))
-model.add(Dense(num_labels))
+
+"""
+后面的代码使用的是bert类型的模型，如果你用的是albert，那么前几行请改为：
+model = build_transformer_model(
+    config_path,
+    checkpoint_path,
+    model='albert',
+)
+output_layer = 'Transformer-FeedForward-Norm'
+output = model.get_layer(output_layer).get_output_at(bert_layers - 1)
+"""
+
+model = build_transformer_model(
+    config_path,
+    checkpoint_path,
+)
+
+output_layer = 'Transformer-%s-FeedForward-Norm' % (bert_layers - 1)
+output = model.get_layer(output_layer).output
+output = Dense(num_labels)(output)
 CRF = ConditionalRandomField(lr_multiplier=crf_lr_multiplier)
-output = model.output
 output = CRF(output)
 
 model = Model(model.input, output)
@@ -113,9 +140,9 @@ class NamedEntityRecognizer(ViterbiDecoder):
             tokens.pop(-2)
         mapping = tokenizer.rematch(text, tokens)
         token_ids = tokenizer.tokens_to_ids(tokens)
-        token_ids = to_array([token_ids])
-        token_ids = sequence_padding(token_ids,length=MAXLEN)
-        nodes = model.predict(token_ids)[0]
+        segment_ids = [0] * len(token_ids)
+        token_ids, segment_ids = to_array([token_ids], [segment_ids])
+        nodes = model.predict([token_ids, segment_ids])[0]
         labels = self.decode(nodes)
         entities, starting = [], False
         for i, label in enumerate(labels):
@@ -143,13 +170,19 @@ def evaluate(data):
     X, Y, Z = 1e-10, 1e-10, 1e-10
     for d in tqdm(data):
         text = ''.join([i[0] for i in d])
+        print(text)
         R = set(NER.recognize(text))
         T = set([tuple(i) for i in d if i[1] != 'O'])
+        print(R)
+        print("===")
+        print(T)
+        exit(0)
         X += len(R & T)
         Y += len(R)
         Z += len(T)
     f1, precision, recall = 2 * X / (Y + Z), X / Y, X / Z
     return f1, precision, recall
+
 
 class Evaluator(keras.callbacks.Callback):
     """评估与保存
@@ -160,12 +193,11 @@ class Evaluator(keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
         trans = K.eval(CRF.trans)
         NER.trans = trans
-        print(NER.trans)
         f1, precision, recall = evaluate(valid_data)
         # 保存最优
         if f1 >= self.best_val_f1:
             self.best_val_f1 = f1
-            model.save_weights('./best_model.weights')
+            model.save_weights('./wobert_best_model.weights')
         print(
             'valid:  f1: %.5f, precision: %.5f, recall: %.5f, best f1: %.5f\n' %
             (f1, precision, recall, self.best_val_f1)
@@ -177,23 +209,19 @@ class Evaluator(keras.callbacks.Callback):
         )
 
 
-TRAIN = 1
-
 if __name__ == '__main__':
 
+    evaluator = Evaluator()
+    train_generator = data_generator(train_data, batch_size)
 
-    if TRAIN:
-        evaluator = Evaluator()
-        train_generator = data_generator(train_data, batch_size)
+    model.fit(
+        train_generator.forfit(),
+        steps_per_epoch=len(train_generator),
+        epochs=epochs,
+        callbacks=[evaluator]
+    )
 
-        model.fit(
-            train_generator.forfit(),
-            steps_per_epoch=len(train_generator),
-            epochs=epochs,
-            callbacks=[evaluator]
-        )
+else:
 
-
-    else:
-        model.load_weights('./best_model.weights')
-        NER.trans = K.eval(CRF.trans)
+    model.load_weights('./wobert_best_model.weights')
+    NER.trans = K.eval(CRF.trans)
