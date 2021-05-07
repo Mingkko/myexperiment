@@ -1,3 +1,6 @@
+#验证集最优f1 0.8255
+#测试集f1 0.82372
+#数据集 http://s3.bmio.net/kashgari/china-people-daily-ner-corpus.tar.gz
 import numpy as np
 from sklearn.metrics import f1_score,recall_score,precision_score
 from bert4keras.backend import keras, K

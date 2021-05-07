@@ -1,3 +1,6 @@
+#数据集 http://s3.bmio.net/kashgari/china-people-daily-ner-corpus.tar.gz
+#验证集 f1 0.9620
+#测试集 f1 0.9525
 import numpy as np
 from bert4keras.backend import keras, K
 from bert4keras.models import build_transformer_model
