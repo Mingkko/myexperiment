@@ -1,4 +1,4 @@
-#写一个距离度量为欧氏距离，权重为uniform的knn，与sklearn的作比较，数据使用
+#写一个距离度量为欧氏距离，权重为uniform的knn，与sklearn的作比较，数据使用鸢尾花
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.neighbors import KNeighborsClassifier
